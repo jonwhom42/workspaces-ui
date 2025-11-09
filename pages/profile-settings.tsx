@@ -1,6 +1,8 @@
 import * as React from 'react';
-import Avatar from '@mui/material/Avatar';
+import type { NextPage } from 'next';
+import type { User } from '@supabase/supabase-js';
 import Alert from '@mui/material/Alert';
+import Avatar from '@mui/material/Avatar';
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
 import Container from '@mui/material/Container';
@@ -9,17 +11,26 @@ import Stack from '@mui/material/Stack';
 import TextField from '@mui/material/TextField';
 import Typography from '@mui/material/Typography';
 import supabase from '../lib/supabaseClient';
-import { createSupabaseServerClient } from '../lib/supabaseServer';
+import { withAuth } from '../lib/authGuard';
 
-export default function ProfileSettings({ user }) {
+type AlertState = {
+  type: 'success' | 'error';
+  message: string;
+};
+
+type ProfileSettingsProps = {
+  user: User;
+};
+
+const ProfileSettings: NextPage<ProfileSettingsProps> = ({ user }) => {
   const [formState, setFormState] = React.useState({
-    fullName: user?.user_metadata?.full_name || '',
-    email: user?.email || '',
+    fullName: (user.user_metadata?.full_name as string | undefined) || '',
+    email: user.email ?? '',
   });
   const [submitting, setSubmitting] = React.useState(false);
-  const [alert, setAlert] = React.useState(null);
+  const [alert, setAlert] = React.useState<AlertState | null>(null);
 
-  const handleChange = (event) => {
+  const handleChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value } = event.target;
     setFormState((prev) => ({
       ...prev,
@@ -27,7 +38,7 @@ export default function ProfileSettings({ user }) {
     }));
   };
 
-  const handleSubmit = async (event) => {
+  const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setSubmitting(true);
     setAlert(null);
@@ -36,12 +47,16 @@ export default function ProfileSettings({ user }) {
         email: formState.email,
         data: { full_name: formState.fullName },
       });
+
       if (error) {
         throw error;
       }
+
       setAlert({ type: 'success', message: 'Profile updated successfully.' });
-    } catch (error) {
-      setAlert({ type: 'error', message: error.message });
+    } catch (submissionError) {
+      const message =
+        submissionError instanceof Error ? submissionError.message : 'Unable to update profile.';
+      setAlert({ type: 'error', message });
     } finally {
       setSubmitting(false);
     }
@@ -73,6 +88,7 @@ export default function ProfileSettings({ user }) {
           <TextField
             name="email"
             label="Email address"
+            type="email"
             value={formState.email}
             onChange={handleChange}
             fullWidth
@@ -83,8 +99,8 @@ export default function ProfileSettings({ user }) {
               variant="outlined"
               onClick={() =>
                 setFormState({
-                  fullName: user?.user_metadata?.full_name || '',
-                  email: user?.email || '',
+                  fullName: (user.user_metadata?.full_name as string | undefined) || '',
+                  email: user.email ?? '',
                 })
               }
             >
@@ -98,34 +114,14 @@ export default function ProfileSettings({ user }) {
       </Paper>
     </Container>
   );
-}
+};
 
-export async function getServerSideProps({ req, res }) {
-  const supabaseServer = createSupabaseServerClient(req, res);
-  const [
-    {
-      data: { user },
-      error,
-    },
-    {
-      data: { session },
-    },
-  ] = await Promise.all([supabaseServer.auth.getUser(), supabaseServer.auth.getSession()]);
-
-  if (error || !user) {
-    return {
-      redirect: {
-        destination: '/login',
-        permanent: false,
-      },
-    };
-  }
-
+export const getServerSideProps = withAuth(async ({ user }) => {
   return {
     props: {
       user,
-      initialUser: user,
-      initialSession: session ?? null,
     },
   };
-}
+});
+
+export default ProfileSettings;

@@ -1,8 +1,11 @@
 import * as React from 'react';
-import Avatar from '@mui/material/Avatar';
+import { useRouter } from 'next/router';
+import type { Session } from '@supabase/supabase-js';
 import Alert from '@mui/material/Alert';
+import Avatar from '@mui/material/Avatar';
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
+import CircularProgress from '@mui/material/CircularProgress';
 import Container from '@mui/material/Container';
 import Paper from '@mui/material/Paper';
 import Stack from '@mui/material/Stack';
@@ -12,17 +15,23 @@ import TextField from '@mui/material/TextField';
 import Typography from '@mui/material/Typography';
 import GoogleIcon from '@mui/icons-material/Google';
 import LockOutlinedIcon from '@mui/icons-material/LockOutlined';
-import CircularProgress from '@mui/material/CircularProgress';
-import supabase from '../lib/supabaseClient';
-import { useRouter } from 'next/router';
+import supabase from '../../../lib/supabaseClient';
 
-const persistSession = async (session) => {
+type AuthMode = 'signin' | 'signup';
+
+type AuthViewProps = {
+  initialMode: AuthMode;
+};
+
+type FormState = {
+  email: string;
+  password: string;
+  confirmPassword: string;
+};
+
+const persistSession = async (session: Session | null) => {
   if (!session?.access_token || !session?.refresh_token) {
     return;
-  }
-
-  if (process.env.NODE_ENV !== 'production') {
-    console.log('[login] Persisting Supabase session');
   }
 
   const response = await fetch('/api/auth/set-cookie', {
@@ -30,6 +39,7 @@ const persistSession = async (session) => {
     headers: {
       'Content-Type': 'application/json',
     },
+    credentials: 'include',
     body: JSON.stringify({
       access_token: session.access_token,
       refresh_token: session.refresh_token,
@@ -43,62 +53,86 @@ const persistSession = async (session) => {
   }
 };
 
-export default function LoginPage() {
+const sanitizeRedirect = (value: string | null): string => {
+  if (!value || !value.startsWith('/')) {
+    return '/app';
+  }
+  return value;
+};
+
+const AuthView: React.FC<AuthViewProps> = ({ initialMode }) => {
   const router = useRouter();
-  const [mode, setMode] = React.useState('signin');
-  const [formState, setFormState] = React.useState({
+  const redirectParam = typeof router.query.redirectTo === 'string' ? router.query.redirectTo : null;
+  const redirectDestination = React.useMemo(
+    () => sanitizeRedirect(redirectParam),
+    [redirectParam],
+  );
+  const [mode, setMode] = React.useState<AuthMode>(initialMode);
+  const [formState, setFormState] = React.useState<FormState>({
     email: '',
     password: '',
     confirmPassword: '',
   });
   const [submitting, setSubmitting] = React.useState(false);
-  const [alert, setAlert] = React.useState(null);
+  const [alert, setAlert] = React.useState<{ type: 'success' | 'error'; message: string } | null>(
+    null,
+  );
+
+  React.useEffect(() => {
+    setMode(initialMode);
+    setAlert(null);
+  }, [initialMode]);
 
   React.useEffect(() => {
     let isMounted = true;
+
     const syncSession = async () => {
       const {
         data: { session },
       } = await supabase.auth.getSession();
-      if (session && isMounted) {
-        try {
-          await persistSession(session);
-          router.replace('/app');
-        } catch (error) {
-          console.error('Persist session failed', error);
-        }
+
+      if (!isMounted || !session) {
+        return;
       }
+
+      await persistSession(session);
+      router.replace(redirectDestination);
     };
+
     syncSession();
-    const { data: listener } = supabase.auth.onAuthStateChange(async (_event, session) => {
-      if (session) {
-        try {
-          await persistSession(session);
-          router.replace('/app');
-        } catch (error) {
-          console.error('Persist session failed', error);
-        }
+    const { data } = supabase.auth.onAuthStateChange(async (_event, session) => {
+      if (!isMounted || !session) {
+        return;
       }
+      await persistSession(session);
+      router.replace(redirectDestination);
     });
+
     return () => {
       isMounted = false;
-      listener.subscription.unsubscribe();
+      data.subscription.unsubscribe();
     };
-  }, [router]);
+  }, [redirectDestination, router]);
 
-  const handleChange = (event, newValue) => {
-    setMode(newValue);
+  const handleTabChange = (_event: React.SyntheticEvent<Element, Event>, nextMode: AuthMode) => {
+    setMode(nextMode);
     setAlert(null);
+
+    const pathname = nextMode === 'signin' ? '/auth/sign-in' : '/auth/sign-up';
+    const query = redirectParam ? `?redirectTo=${encodeURIComponent(redirectParam)}` : '';
+
+    router.replace(`${pathname}${query}`, undefined, { shallow: true });
   };
 
-  const handleInputChange = (event) => {
+  const handleInputChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const { name, value } = event.target;
     setFormState((prev) => ({
       ...prev,
-      [event.target.name]: event.target.value,
+      [name]: value,
     }));
   };
 
-  const handleSubmit = async (event) => {
+  const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setSubmitting(true);
     setAlert(null);
@@ -118,7 +152,7 @@ export default function LoginPage() {
         }
         if (data.session) {
           await persistSession(data.session);
-          router.push('/app');
+          router.replace(redirectDestination);
           return;
         }
         setAlert({
@@ -134,10 +168,12 @@ export default function LoginPage() {
           throw error;
         }
         await persistSession(data.session);
-        router.push('/app');
+        router.replace(redirectDestination);
       }
-    } catch (error) {
-      setAlert({ type: 'error', message: error.message });
+    } catch (submissionError) {
+      const message =
+        submissionError instanceof Error ? submissionError.message : 'Authentication failed.';
+      setAlert({ type: 'error', message });
     } finally {
       setSubmitting(false);
     }
@@ -147,18 +183,19 @@ export default function LoginPage() {
     setSubmitting(true);
     setAlert(null);
     try {
-      const redirectTo = `${window.location.origin}/login`;
+      const redirectTo =
+        typeof window !== 'undefined' ? `${window.location.origin}${router.asPath}` : undefined;
       const { error } = await supabase.auth.signInWithOAuth({
         provider: 'google',
-        options: {
-          redirectTo,
-        },
+        options: redirectTo ? { redirectTo } : undefined,
       });
       if (error) {
         throw error;
       }
-    } catch (error) {
-      setAlert({ type: 'error', message: error.message });
+    } catch (submissionError) {
+      const message =
+        submissionError instanceof Error ? submissionError.message : 'Unable to start Google sign in.';
+      setAlert({ type: 'error', message });
       setSubmitting(false);
     }
   };
@@ -176,7 +213,7 @@ export default function LoginPage() {
             </Typography>
           </Stack>
 
-          <Tabs value={mode} onChange={handleChange} centered>
+          <Tabs value={mode} onChange={handleTabChange} centered>
             <Tab value="signin" label="Sign In" />
             <Tab value="signup" label="Sign Up" />
           </Tabs>
@@ -188,6 +225,7 @@ export default function LoginPage() {
               <TextField
                 label="Email address"
                 name="email"
+                type="email"
                 fullWidth
                 required
                 autoComplete="email"
@@ -239,4 +277,6 @@ export default function LoginPage() {
       </Paper>
     </Container>
   );
-}
+};
+
+export default AuthView;

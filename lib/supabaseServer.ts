@@ -2,8 +2,8 @@ import { createServerClient } from '@supabase/ssr';
 import { createClient } from '@supabase/supabase-js';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { GetServerSidePropsContext, NextApiRequest, NextApiResponse } from 'next';
-import { serialize } from 'cookie';
 import type { IncomingMessage, ServerResponse } from 'http';
+import { serialize } from 'cookie';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
@@ -13,17 +13,25 @@ if (!supabaseUrl || !supabaseAnonKey) {
   throw new Error('Missing NEXT_PUBLIC_SUPABASE_URL or NEXT_PUBLIC_SUPABASE_ANON_KEY');
 }
 
-if (!serviceRoleKey) {
-  throw new Error('Missing SUPABASE_SERVICE_ROLE_KEY');
-}
+type RequestLike =
+  | NextApiRequest
+  | GetServerSidePropsContext['req']
+  | (IncomingMessage & { cookies?: Record<string, string> });
 
-type RequestLike = NextApiRequest | GetServerSidePropsContext['req'] | (IncomingMessage & { cookies?: Record<string, string> });
-type ResponseLike = NextApiResponse | GetServerSidePropsContext['res'] | ServerResponse;
+type ResponseLike =
+  | NextApiResponse
+  | GetServerSidePropsContext['res']
+  | ServerResponse;
+
+export type WithServerAuthContext =
+  | { req: RequestLike; res: ResponseLike }
+  | GetServerSidePropsContext;
 
 const getCookies = (req: RequestLike): Record<string, string> => {
   if ('cookies' in req && req.cookies) {
     return req.cookies as Record<string, string>;
   }
+
   const cookieHeader = req.headers?.cookie ?? '';
   return Object.fromEntries(
     cookieHeader
@@ -47,11 +55,23 @@ const appendSetCookie = (res: ResponseLike, cookie: string) => {
     return;
   }
 
-  const value = Array.isArray(existing) ? existing : [String(existing)];
-  res.setHeader('Set-Cookie', [...value, cookie]);
+  const values = Array.isArray(existing) ? existing : [String(existing)];
+  res.setHeader('Set-Cookie', [...values, cookie]);
 };
 
-export const createSupabaseServerClient = (req: RequestLike, res: ResponseLike): SupabaseClient => {
+const resolveContext = (context: WithServerAuthContext): { req: RequestLike; res: ResponseLike } => {
+  if ('req' in context && 'res' in context) {
+    return { req: context.req, res: context.res };
+  }
+  return {
+    req: (context as GetServerSidePropsContext).req,
+    res: (context as GetServerSidePropsContext).res,
+  };
+};
+
+export const createServerSupabase = (context: WithServerAuthContext): SupabaseClient => {
+  const { req, res } = resolveContext(context);
+
   return createServerClient(supabaseUrl, supabaseAnonKey, {
     cookies: {
       get(name: string) {
@@ -85,7 +105,13 @@ export const createSupabaseServerClient = (req: RequestLike, res: ResponseLike):
 
 let serviceRoleClient: SupabaseClient | null = null;
 
+/**
+ * Server-only client that can bypass RLS. NEVER expose the service role key client-side.
+ */
 export const getSupabaseServiceRoleClient = (): SupabaseClient => {
+  if (!serviceRoleKey) {
+    throw new Error('Missing SUPABASE_SERVICE_ROLE_KEY');
+  }
   if (!serviceRoleClient) {
     serviceRoleClient = createClient(supabaseUrl, serviceRoleKey, {
       auth: {
@@ -97,4 +123,6 @@ export const getSupabaseServiceRoleClient = (): SupabaseClient => {
   return serviceRoleClient;
 };
 
-export default createSupabaseServerClient;
+export type ServerSupabaseClient = ReturnType<typeof createServerSupabase>;
+
+export default createServerSupabase;

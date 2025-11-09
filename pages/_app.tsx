@@ -15,7 +15,7 @@ type ExtendedPageProps = {
   initialSession?: Session | null;
   initialUser?: User | null;
   workspaces?: WorkspaceWithRole[];
-  workspaceId?: string | null;
+  currentWorkspace?: WorkspaceWithRole | null;
 } & AppProps['pageProps'];
 
 type ExtendedAppProps = Omit<AppProps<ExtendedPageProps>, 'pageProps'> & {
@@ -24,13 +24,18 @@ type ExtendedAppProps = Omit<AppProps<ExtendedPageProps>, 'pageProps'> & {
 
 export default function MyApp(props: ExtendedAppProps) {
   const { Component, pageProps, router } = props;
-  const { initialSession, initialUser, workspaces, workspaceId } = pageProps;
+  const {
+    initialSession = null,
+    initialUser = null,
+    workspaces = [],
+    currentWorkspace = null,
+  } = pageProps;
   const isWorkspaceRoute = router.pathname.startsWith('/w/');
 
   const workspaceShell = isWorkspaceRoute ? (
     <WorkspaceProvider
-      initialWorkspaces={workspaces ?? []}
-      initialWorkspaceId={workspaceId ?? null}
+      initialWorkspaces={workspaces}
+      initialWorkspace={currentWorkspace}
     >
       <MiniDrawer>
         <Component {...pageProps} />

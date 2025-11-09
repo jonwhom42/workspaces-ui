@@ -1,4 +1,5 @@
 import * as React from 'react';
+import type { NextPage } from 'next';
 import Button from '@mui/material/Button';
 import Container from '@mui/material/Container';
 import Divider from '@mui/material/Divider';
@@ -9,14 +10,21 @@ import Stack from '@mui/material/Stack';
 import Switch from '@mui/material/Switch';
 import TextField from '@mui/material/TextField';
 import Typography from '@mui/material/Typography';
-import { requireAuthAndWorkspace } from '../../../lib/requireWorkspacePage';
+import { withAuth } from '../../../lib/authGuard';
+import { getWorkspaceContext, type WorkspaceWithRole } from '../../../lib/workspaces';
+import { getSupabaseServiceRoleClient } from '../../../lib/supabaseServer';
 
-export default function WorkspaceSettings({ workspace }) {
+type WorkspaceSettingsProps = {
+  workspace: WorkspaceWithRole;
+  workspaces: WorkspaceWithRole[];
+};
+
+const WorkspaceSettings: NextPage<WorkspaceSettingsProps> = ({ workspace }) => {
   return (
     <Container maxWidth="md" sx={{ py: 4 }}>
       <Stack spacing={1} sx={{ mb: 4 }}>
         <Typography variant="overline" color="text.secondary">
-          Admin · {workspace.name}
+          Admin // {workspace.name}
         </Typography>
         <Typography variant="h4">Settings</Typography>
         <Typography color="text.secondary">
@@ -53,6 +61,47 @@ export default function WorkspaceSettings({ workspace }) {
       </Paper>
     </Container>
   );
-}
+};
 
-export const getServerSideProps = requireAuthAndWorkspace;
+export const getServerSideProps = withAuth(async (ctx) => {
+  const workspaceId = ctx.params?.workspaceId;
+
+  if (typeof workspaceId !== 'string') {
+    return {
+      redirect: {
+        destination: '/app',
+        permanent: false,
+      },
+    };
+  }
+
+  const { workspace, workspaces } = await getWorkspaceContext(
+    ctx.supabase,
+    ctx.user.id,
+    workspaceId,
+    { fallbackClient: getSupabaseServiceRoleClient() },
+  );
+
+  console.info('[pages/w/settings] workspace lookup', {
+    userId: ctx.user.id,
+    workspaceId,
+    found: Boolean(workspace),
+    totalWorkspaces: workspaces.length,
+  });
+
+  if (!workspace) {
+    return {
+      notFound: true,
+    };
+  }
+
+  return {
+    props: {
+      workspace,
+      workspaces,
+      currentWorkspace: workspace,
+    },
+  };
+});
+
+export default WorkspaceSettings;

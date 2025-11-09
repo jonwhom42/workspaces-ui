@@ -59,8 +59,7 @@ export default function MiniDrawer({ children }: MiniDrawerProps) {
   const router = useRouter();
   const theme = useTheme();
   const { user } = useAuth();
-  const { workspaces, currentWorkspace, loading, selectWorkspace, refreshWorkspaces } =
-    useWorkspace();
+  const { workspaces, currentWorkspace, loading, setWorkspace, refreshWorkspaces } = useWorkspace();
   const isDesktop = useMediaQuery(theme.breakpoints.up('md'));
   const [mobileOpen, setMobileOpen] = React.useState(false);
   const [desktopOpen, setDesktopOpen] = React.useState(true);
@@ -115,12 +114,12 @@ export default function MiniDrawer({ children }: MiniDrawerProps) {
     handleUserMenuClose();
     await supabase.auth.signOut();
     await fetch('/api/auth/logout', { method: 'POST' });
-    router.replace('/login');
+    router.replace('/auth/sign-in');
   };
 
   const handleWorkspaceSelect = (workspaceId: string) => {
     handleWorkspaceMenuClose();
-    selectWorkspace(workspaceId);
+    setWorkspace(workspaceId);
   };
 
   const handleCreateWorkspace = async (event: React.FormEvent) => {
@@ -143,12 +142,9 @@ export default function MiniDrawer({ children }: MiniDrawerProps) {
         throw new Error(payload.error || 'Unable to create workspace.');
       }
       const payload = await response.json();
-      const nextWorkspaceId = payload.workspace.id;
-      const updated = await refreshWorkspaces();
-      if (!updated.some((workspace) => workspace.id === nextWorkspaceId)) {
-        await refreshWorkspaces();
-      }
-      selectWorkspace(nextWorkspaceId);
+      const nextWorkspaceId: string = payload.workspaceId;
+      await refreshWorkspaces();
+      setWorkspace(nextWorkspaceId);
       setCreateWorkspaceName('');
       setCreateDialogOpen(false);
     } catch (error: any) {
@@ -340,7 +336,7 @@ export default function MiniDrawer({ children }: MiniDrawerProps) {
               </Menu>
             </>
           ) : (
-            <Button variant="outlined" size="small" onClick={() => router.push('/login')}>
+            <Button variant="outlined" size="small" onClick={() => router.push('/auth/sign-in')}>
               Sign in
             </Button>
           )}
