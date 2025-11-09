@@ -30,6 +30,7 @@ import MenuIcon from '@mui/icons-material/Menu';
 import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
 import DashboardOutlinedIcon from '@mui/icons-material/DashboardOutlined';
 import BuildOutlinedIcon from '@mui/icons-material/BuildOutlined';
+import AutoAwesomeOutlinedIcon from '@mui/icons-material/AutoAwesomeOutlined';
 import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined';
 import LogoutRoundedIcon from '@mui/icons-material/LogoutRounded';
 import ManageAccountsRoundedIcon from '@mui/icons-material/ManageAccountsRounded';
@@ -50,6 +51,7 @@ const buildNavItems = (workspace: WorkspaceWithRole | null) => {
   }
   return [
     { label: 'Dashboard', path: `/w/${workspace.id}/dashboard`, icon: DashboardOutlinedIcon },
+    { label: 'Seeds', path: `/w/${workspace.id}/seeds`, icon: AutoAwesomeOutlinedIcon },
     { label: 'Tools', path: `/w/${workspace.id}/tools`, icon: BuildOutlinedIcon },
     { label: 'Settings', path: `/w/${workspace.id}/settings`, icon: SettingsOutlinedIcon },
   ];

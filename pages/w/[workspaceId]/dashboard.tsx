@@ -1,6 +1,8 @@
 import * as React from 'react';
 import type { NextPage } from 'next';
+import Link from 'next/link';
 import Box from '@mui/material/Box';
+import Button from '@mui/material/Button';
 import Card from '@mui/material/Card';
 import CardContent from '@mui/material/CardContent';
 import CardHeader from '@mui/material/CardHeader';
@@ -10,13 +12,17 @@ import Typography from '@mui/material/Typography';
 import { withAuth } from '../../../lib/authGuard';
 import { getWorkspaceContext, type WorkspaceWithRole } from '../../../lib/workspaces';
 import { getSupabaseServiceRoleClient } from '../../../lib/supabaseServer';
+import { getSeedsForWorkspace } from '../../../lib/seeds';
+import type { Seed } from '../../../types/db';
+import { CopilotCard } from '../../../src/components/copilot/CopilotCard';
 
 type WorkspaceDashboardProps = {
   workspace: WorkspaceWithRole;
   workspaces: WorkspaceWithRole[];
+  seeds: Seed[];
 };
 
-const WorkspaceDashboard: NextPage<WorkspaceDashboardProps> = ({ workspace }) => {
+const WorkspaceDashboard: NextPage<WorkspaceDashboardProps> = ({ workspace, seeds }) => {
   return (
     <Container maxWidth="lg" sx={{ py: 4 }}>
       <Stack spacing={3}>
@@ -79,6 +85,62 @@ const WorkspaceDashboard: NextPage<WorkspaceDashboardProps> = ({ workspace }) =>
             </Typography>
           </CardContent>
         </Card>
+
+        <Card variant="outlined">
+          <CardHeader
+            title="Your Seeds"
+            subheader="Top ideas this workspace is nurturing"
+            action={
+              <Button component={Link} href={`/w/${workspace.id}/seeds`} variant="outlined" size="small">
+                View all
+              </Button>
+            }
+          />
+          <CardContent>
+            {seeds.length === 0 ? (
+              <Typography color="text.secondary">
+                No seeds yet.{' '}
+                <Button component={Link} href={`/w/${workspace.id}/seeds`} size="small">
+                  Create one now
+                </Button>
+              </Typography>
+            ) : (
+              <Stack spacing={2}>
+                {seeds.map((seed) => (
+                  <Box
+                    key={seed.id}
+                    sx={{
+                      border: '1px solid',
+                      borderColor: 'divider',
+                      borderRadius: 1,
+                      p: 2,
+                    }}
+                  >
+                    <Typography variant="subtitle2" fontWeight={600}>
+                      {seed.title}
+                    </Typography>
+                    <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+                      {seed.summary || 'No summary yet'}
+                    </Typography>
+                    <Button
+                      component={Link}
+                      href={`/w/${workspace.id}/seeds/${seed.id}`}
+                      size="small"
+                    >
+                      Open Seed
+                    </Button>
+                  </Box>
+                ))}
+              </Stack>
+            )}
+          </CardContent>
+        </Card>
+
+        <CopilotCard
+          title="Workspace Copilot"
+          description="Ask questions about this workspace across all seeds."
+          workspaceId={workspace.id}
+        />
       </Stack>
     </Container>
   );
@@ -96,11 +158,12 @@ export const getServerSideProps = withAuth(async (ctx) => {
     };
   }
 
+  const serviceRole = getSupabaseServiceRoleClient();
   const { workspace, workspaces } = await getWorkspaceContext(
     ctx.supabase,
     ctx.user.id,
     workspaceId,
-    { fallbackClient: getSupabaseServiceRoleClient() },
+    { fallbackClient: serviceRole },
   );
 
   console.info('[pages/w/dashboard] workspace lookup', {
@@ -116,11 +179,16 @@ export const getServerSideProps = withAuth(async (ctx) => {
     };
   }
 
+  const seeds = await getSeedsForWorkspace(ctx.supabase, workspaceId, ctx.user.id, {
+    fallbackClient: serviceRole,
+  });
+
   return {
     props: {
       workspace,
       workspaces,
       currentWorkspace: workspace,
+      seeds: seeds.slice(0, 3),
     },
   };
 });
