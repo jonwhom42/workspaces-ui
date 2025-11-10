@@ -1,20 +1,6 @@
 import * as React from 'react';
 import type { NextPage } from 'next';
-import {
-  Box,
-  Button,
-  Container,
-  Dialog,
-  DialogActions,
-  DialogContent,
-  DialogTitle,
-  List,
-  ListItem,
-  ListItemText,
-  Stack,
-  TextField,
-  Typography,
-} from '@mui/material';
+import { Box, Container, List, ListItem, ListItemText, Stack, Typography } from '@mui/material';
 import { withAuth } from '../../../../lib/authGuard';
 import { getWorkspaceContext } from '../../../../lib/workspaces';
 import { getSeedsForWorkspace } from '../../../../lib/seeds';
@@ -23,6 +9,7 @@ import type { WorkspaceWithRole } from '../../../../lib/workspaces';
 import type { Seed } from '../../../../types/db';
 import Link from 'next/link';
 import { useRouter } from 'next/router';
+import { CopilotPanel } from '../../../../src/components/copilot/CopilotPanel';
 
 type SeedsPageProps = {
   workspace: WorkspaceWithRole;
@@ -33,59 +20,54 @@ type SeedsPageProps = {
 const SeedsPage: NextPage<SeedsPageProps> = ({ workspace, workspaces, seeds }) => {
   const router = useRouter();
   const workspaceId = workspace.id;
-  const [dialogOpen, setDialogOpen] = React.useState(false);
-  const [formState, setFormState] = React.useState({
-    title: '',
-    summary: '',
-    whyItMatters: '',
-  });
-  const [submitting, setSubmitting] = React.useState(false);
-  const [error, setError] = React.useState<string | null>(null);
 
-  const handleSubmit = async (event: React.FormEvent) => {
-    event.preventDefault();
-    setSubmitting(true);
-    setError(null);
-    try {
-      const response = await fetch('/api/seeds/create', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          workspaceId,
-          title: formState.title,
-          summary: formState.summary,
-          whyItMatters: formState.whyItMatters,
-        }),
-      });
-      if (!response.ok) {
-        const payload = await response.json().catch(() => ({}));
-        throw new Error(payload.error || 'Unable to create seed');
-      }
-      const payload = await response.json();
-      router.push(`/w/${workspaceId}/seeds/${payload.seed.id}`);
-    } catch (submissionError) {
-      setError(submissionError instanceof Error ? submissionError.message : 'Unknown error');
-    } finally {
-      setSubmitting(false);
+  const handleAcceptSeedProposal = async (draft: { title: string; summary?: string; why_it_matters?: string }) => {
+    const response = await fetch('/api/seeds/create', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        workspaceId,
+        title: draft.title,
+        summary: draft.summary,
+        whyItMatters: draft.why_it_matters,
+      }),
+    });
+    const payload = await response.json();
+    if (!response.ok || !payload?.seed?.id) {
+      throw new Error(payload.error || 'Unable to create seed');
     }
+    router.push(`/w/${workspaceId}/seeds/${payload.seed.id}`);
   };
-
   return (
     <Container maxWidth="lg" sx={{ py: 4 }}>
-      <Stack direction={{ xs: 'column', sm: 'row' }} justifyContent="space-between" mb={4}>
-        <Box>
-          <Typography variant="overline" color="text.secondary">
-            {workspace.name}
-          </Typography>
-          <Typography variant="h4">Seeds</Typography>
-          <Typography color="text.secondary">
-            Capture the core ideas your workspace is nurturing. Everything else links back to these.
-          </Typography>
-        </Box>
-        <Button variant="contained" onClick={() => setDialogOpen(true)}>
-          New Seed
-        </Button>
+      <Stack spacing={2} mb={4}>
+        <Typography variant="overline" color="text.secondary">
+          {workspace.name}
+        </Typography>
+        <Typography variant="h4">Seeds</Typography>
+        <Typography color="text.secondary">
+          Seeds capture the ideas, goals, or hypotheses this workspace is actively tending to.
+        </Typography>
       </Stack>
+
+      <Box sx={{ mb: 4 }}>
+        <CopilotPanel
+          workspaceId={workspaceId}
+          onDistillToSeed={async (conversation) => {
+            const response = await fetch('/api/seeds/from-conversation', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ workspaceId, messages: conversation }),
+            });
+            const payload = await response.json();
+            if (!response.ok) {
+              throw new Error(payload.error || 'Unable to create seed');
+            }
+            router.push(`/w/${workspaceId}/seeds/${payload.seedId}`);
+          }}
+          onAcceptSeedProposal={handleAcceptSeedProposal}
+        />
+      </Box>
 
       {seeds.length === 0 ? (
         <Box
@@ -99,11 +81,8 @@ const SeedsPage: NextPage<SeedsPageProps> = ({ workspace, workspaces, seeds }) =
         >
           <Typography variant="h6">No seeds yet</Typography>
           <Typography color="text.secondary">
-            Start by defining the core idea you want this workspace to explore.
+            Start by describing an idea above — Copilot will propose the first seed.
           </Typography>
-          <Button sx={{ mt: 2 }} variant="outlined" onClick={() => setDialogOpen(true)}>
-            Create your first seed
-          </Button>
         </Box>
       ) : (
         <List>
@@ -137,59 +116,6 @@ const SeedsPage: NextPage<SeedsPageProps> = ({ workspace, workspaces, seeds }) =
           ))}
         </List>
       )}
-
-      <Dialog open={dialogOpen} onClose={() => setDialogOpen(false)} fullWidth maxWidth="sm">
-        <DialogTitle>New Seed</DialogTitle>
-        <Box component="form" onSubmit={handleSubmit}>
-          <DialogContent
-            sx={{
-              display: 'flex',
-              flexDirection: 'column',
-              gap: 2,
-              pt: 0,
-            }}
-          >
-            <TextField
-              label="Title"
-              value={formState.title}
-              onChange={(event) =>
-                setFormState((prev) => ({ ...prev, title: event.target.value }))
-              }
-              required
-              fullWidth
-            />
-            <TextField
-              label="Summary"
-              value={formState.summary}
-              onChange={(event) =>
-                setFormState((prev) => ({ ...prev, summary: event.target.value }))
-              }
-              multiline
-              minRows={2}
-            />
-            <TextField
-              label="Why it matters"
-              value={formState.whyItMatters}
-              onChange={(event) =>
-                setFormState((prev) => ({ ...prev, whyItMatters: event.target.value }))
-              }
-              multiline
-              minRows={3}
-            />
-            {error && (
-              <Typography color="error" variant="body2">
-                {error}
-              </Typography>
-            )}
-          </DialogContent>
-          <DialogActions sx={{ px: 3, pb: 3 }}>
-            <Button onClick={() => setDialogOpen(false)}>Cancel</Button>
-            <Button type="submit" variant="contained" disabled={submitting}>
-              {submitting ? 'Creating...' : 'Create Seed'}
-            </Button>
-          </DialogActions>
-        </Box>
-      </Dialog>
     </Container>
   );
 };

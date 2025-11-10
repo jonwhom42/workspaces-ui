@@ -1,10 +1,34 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { createServerSupabase } from '../../../lib/supabaseServer';
 import { getUserWorkspaceById } from '../../../lib/workspaces';
-import { getEmbeddingForText, generateCopilotAnswer, moderateText } from '../../../lib/aiClient';
+import {
+  type CopilotLens,
+  type CopilotMessage,
+  generateCopilotAnswer,
+  getEmbeddingForText,
+  moderateText,
+} from '../../../lib/aiClient';
 import { getRelevantContextsForQuery } from '../../../lib/embeddings';
 
 const allowedModes = new Set(['ask', 'summarize', 'reflect', 'plan']);
+const allowedLenses = new Set(['explore', 'distill', 'design', 'mirror']);
+
+const lensContextPriority: Record<CopilotLens, string[]> = {
+  explore: ['knowledge', 'insight', 'experiment', 'principle'],
+  distill: ['insight', 'principle', 'knowledge', 'experiment'],
+  design: ['experiment', 'knowledge', 'insight', 'principle'],
+  mirror: ['principle', 'insight', 'knowledge', 'experiment'],
+};
+
+const prioritizeContexts = <T extends { type: string }>(contexts: T[], lens: CopilotLens): T[] => {
+  const order = lensContextPriority[lens] ?? [];
+  const fallbackIndex = order.length + 1;
+  return [...contexts].sort((a, b) => {
+    const aIndex = order.indexOf(a.type);
+    const bIndex = order.indexOf(b.type);
+    return (aIndex === -1 ? fallbackIndex : aIndex) - (bIndex === -1 ? fallbackIndex : bIndex);
+  });
+};
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -22,7 +46,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(401).json({ error: 'Unauthorized' });
   }
 
-  const { workspaceId, seedId, mode = 'ask', message } = req.body ?? {};
+  const { workspaceId, seedId, mode = 'ask', lens = 'explore', messages } = req.body ?? {};
 
   if (typeof workspaceId !== 'string' || !workspaceId) {
     return res.status(400).json({ error: 'workspaceId is required' });
@@ -32,12 +56,39 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(400).json({ error: 'seedId must be a string' });
   }
 
-  if (typeof message !== 'string' || !message.trim()) {
-    return res.status(400).json({ error: 'message is required' });
-  }
-
   if (!allowedModes.has(mode)) {
     return res.status(400).json({ error: 'Invalid mode' });
+  }
+
+  if (typeof lens !== 'string' || !allowedLenses.has(lens)) {
+    return res.status(400).json({ error: 'Invalid lens' });
+  }
+
+  const normalizedLens = lens as CopilotLens;
+
+  if (!Array.isArray(messages) || messages.length === 0) {
+    return res.status(400).json({ error: 'messages must be a non-empty array' });
+  }
+
+  const normalizedMessages: CopilotMessage[] = messages
+    .map((message) => ({
+      role: message?.role,
+      content: typeof message?.content === 'string' ? message.content : '',
+    }))
+    .filter(
+      (message) => message.role === 'user' || message.role === 'assistant',
+    ) as CopilotMessage[];
+
+  if (!normalizedMessages.length) {
+    return res.status(400).json({ error: 'At least one user message is required' });
+  }
+
+  const lastUserMessage = [...normalizedMessages]
+    .reverse()
+    .find((message) => message.role === 'user' && message.content.trim().length);
+
+  if (!lastUserMessage) {
+    return res.status(400).json({ error: 'Must include a user message' });
   }
 
   const membership = await getUserWorkspaceById(supabase, user.id, workspaceId);
@@ -45,14 +96,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(403).json({ error: 'Forbidden' });
   }
 
-  const moderation = await moderateText(message);
+  const moderation = await moderateText(lastUserMessage.content);
   if (moderation.flagged) {
     return res.status(400).json({ error: 'Message failed moderation' });
   }
 
   let queryEmbedding: number[];
   try {
-    queryEmbedding = await getEmbeddingForText(message);
+    queryEmbedding = await getEmbeddingForText(lastUserMessage.content);
   } catch (error) {
     console.error('[api/ai/query] Embedding error', error);
     return res.status(500).json({ error: 'Embedding generation failed' });
@@ -64,11 +115,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     queryEmbedding,
     limit: 10,
   });
+  const prioritizedContexts = prioritizeContexts(contexts, normalizedLens);
 
   const principles: string[] = [];
   const { data: workspacePrinciples } = await supabase
     .from('principles')
-    .select('statement, category, seed_id')
+    .select('statement, category')
     .eq('workspace_id', workspaceId)
     .eq('active', true)
     .is('seed_id', null);
@@ -110,15 +162,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   try {
-    const answer = await generateCopilotAnswer({
-      query: message,
+    const copilotResponse = await generateCopilotAnswer({
+      messages: normalizedMessages,
       mode,
+      lens: normalizedLens,
       workspaceSummary,
       seedSummary: seedRow
         ? `${seedRow.title ?? ''}\n${seedRow.summary ?? ''}\n${seedRow.why_it_matters ?? ''}`
         : undefined,
       principles,
-      contexts,
+      contexts: prioritizedContexts,
     });
 
     await supabase.from('events').insert({
@@ -128,13 +181,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       type: 'copilot_query',
       payload: {
         mode,
-        context_refs: contexts.slice(0, 5).map((ctx) => ctx.ref),
+        lens: normalizedLens,
+        context_refs: prioritizedContexts.slice(0, 5).map((ctx) => ctx.ref),
       },
     });
 
     return res.status(200).json({
-      answer: answer.answer,
-      sources: contexts.map((ctx) => ({
+      message: { role: 'assistant', content: copilotResponse.answer },
+      structured: copilotResponse.structured,
+      sources: prioritizedContexts.map((ctx) => ({
         type: ctx.type,
         ref: ctx.ref,
         label: ctx.title ?? ctx.ref,

@@ -29,7 +29,6 @@ import SwipeableDrawer from '@mui/material/SwipeableDrawer';
 import MenuIcon from '@mui/icons-material/Menu';
 import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
 import DashboardOutlinedIcon from '@mui/icons-material/DashboardOutlined';
-import BuildOutlinedIcon from '@mui/icons-material/BuildOutlined';
 import AutoAwesomeOutlinedIcon from '@mui/icons-material/AutoAwesomeOutlined';
 import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined';
 import LogoutRoundedIcon from '@mui/icons-material/LogoutRounded';
@@ -52,7 +51,6 @@ const buildNavItems = (workspace: WorkspaceWithRole | null) => {
   return [
     { label: 'Dashboard', path: `/w/${workspace.id}/dashboard`, icon: DashboardOutlinedIcon },
     { label: 'Seeds', path: `/w/${workspace.id}/seeds`, icon: AutoAwesomeOutlinedIcon },
-    { label: 'Tools', path: `/w/${workspace.id}/tools`, icon: BuildOutlinedIcon },
     { label: 'Settings', path: `/w/${workspace.id}/settings`, icon: SettingsOutlinedIcon },
   ];
 };
@@ -157,20 +155,24 @@ export default function MiniDrawer({ children }: MiniDrawerProps) {
   };
 
   const drawerHeader = (
-    <Toolbar sx={{ px: 3, flexDirection: 'column', alignItems: 'flex-start', gap: 0.5 }}>
-      <Typography variant="overline" color="text.secondary">
-        Workspace
-      </Typography>
-      <Typography
-        variant="h6"
-        component="div"
-        sx={{ fontWeight: 600, width: '100%', overflow: 'hidden', textOverflow: 'ellipsis' }}
+    <Toolbar sx={{ px: 3, flexDirection: 'column', alignItems: 'flex-start', gap: 0.75 }}>
+      <Button
+        onClick={handleWorkspaceMenuOpen}
+        endIcon={<KeyboardArrowDownIcon />}
+        sx={{
+          textTransform: 'none',
+          px: 0,
+          fontSize: '1rem',
+          fontWeight: 600,
+          color: 'text.primary',
+          justifyContent: 'flex-start',
+        }}
       >
         {currentWorkspace?.name ?? 'Select workspace'}
-      </Typography>
+      </Button>
       <Button
         size="small"
-        sx={{ mt: 0.5, px: 0 }}
+        sx={{ px: 0 }}
         onClick={() => setCreateDialogOpen(true)}
         color="primary"
       >
@@ -275,16 +277,6 @@ export default function MiniDrawer({ children }: MiniDrawerProps) {
           >
             <MenuIcon />
           </IconButton>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, minWidth: 0 }}>
-            <Typography variant="h6" noWrap component="div">
-              {currentWorkspace?.name ?? 'Workspace'}
-            </Typography>
-            <Tooltip title="Switch workspace">
-              <IconButton size="small" onClick={handleWorkspaceMenuOpen}>
-                <KeyboardArrowDownIcon />
-              </IconButton>
-            </Tooltip>
-          </Box>
           <Box sx={{ flexGrow: 1 }} />
           {user ? (
             <>

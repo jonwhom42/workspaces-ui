@@ -50,7 +50,6 @@ const buildNavItems = (workspace: WorkspaceWithRole | null) => {
   }
   return [
     { label: 'Dashboard', path: `/w/${workspace.id}/dashboard`, icon: DashboardOutlinedIcon },
-    { label: 'Tools', path: `/w/${workspace.id}/tools`, icon: BuildOutlinedIcon },
     { label: 'Settings', path: `/w/${workspace.id}/settings`, icon: SettingsOutlinedIcon },
   ];
 };

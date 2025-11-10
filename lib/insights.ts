@@ -65,3 +65,25 @@ export const createInsight = async (
 
   return data as Insight;
 };
+
+export const getInsightsForSeed = async (
+  supabase: SupabaseClient,
+  workspaceId: string,
+  userId: string,
+  seedId: string,
+  options?: SeedHelperOptions,
+): Promise<Insight[]> => {
+  await ensureWorkspaceMembership(supabase, workspaceId, userId, options);
+  const { data, error } = await supabase
+    .from('insights')
+    .select('*')
+    .eq('workspace_id', workspaceId)
+    .eq('seed_id', seedId)
+    .order('created_at', { ascending: false });
+
+  if (error) {
+    throw error;
+  }
+
+  return (data ?? []) as Insight[];
+};
