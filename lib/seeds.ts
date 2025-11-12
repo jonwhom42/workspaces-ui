@@ -9,6 +9,13 @@ type CreateSeedInput = {
   status?: string;
 };
 
+type UpdateSeedInput = {
+  title?: string;
+  summary?: string | null;
+  whyItMatters?: string | null;
+  status?: string;
+};
+
 export type SeedHelperOptions = {
   fallbackClient?: SupabaseClient;
 };
@@ -98,6 +105,69 @@ export const createSeed = async (
     seed_id: data.id,
     type: 'seed_created',
     payload: { seed_id: data.id, title: input.title },
+  });
+
+  return data as Seed;
+};
+
+export const updateSeed = async (
+  supabase: SupabaseClient,
+  workspaceId: string,
+  userId: string,
+  seedId: string,
+  input: UpdateSeedInput,
+  options?: SeedHelperOptions,
+): Promise<Seed> => {
+  await ensureWorkspaceMembership(supabase, workspaceId, userId, options);
+  const payload: Record<string, unknown> = {};
+
+  if (Object.prototype.hasOwnProperty.call(input, 'title')) {
+    if (typeof input.title === 'string' && input.title.trim()) {
+      payload.title = input.title.trim();
+    }
+  }
+  if (Object.prototype.hasOwnProperty.call(input, 'summary')) {
+    if (typeof input.summary === 'string') {
+      payload.summary = input.summary.trim() || null;
+    } else {
+      payload.summary = input.summary ?? null;
+    }
+  }
+  if (Object.prototype.hasOwnProperty.call(input, 'whyItMatters')) {
+    if (typeof input.whyItMatters === 'string') {
+      payload.why_it_matters = input.whyItMatters.trim() || null;
+    } else {
+      payload.why_it_matters = input.whyItMatters ?? null;
+    }
+  }
+  if (Object.prototype.hasOwnProperty.call(input, 'status')) {
+    payload.status = input.status;
+  }
+
+  if (Object.keys(payload).length === 0) {
+    throw new Error('No fields provided for update');
+  }
+
+  const { data, error } = await supabase
+    .from('seeds')
+    .update(payload)
+    .eq('workspace_id', workspaceId)
+    .eq('id', seedId)
+    .select('*')
+    .single();
+
+  if (error || !data) {
+    throw error ?? new Error('Unable to update seed');
+  }
+
+  await supabase.from('events').insert({
+    workspace_id: workspaceId,
+    user_id: userId,
+    seed_id: seedId,
+    type: 'seed_updated',
+    payload: {
+      fields: Object.keys(payload),
+    },
   });
 
   return data as Seed;

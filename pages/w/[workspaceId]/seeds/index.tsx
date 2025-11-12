@@ -1,15 +1,26 @@
-import * as React from 'react';
-import type { NextPage } from 'next';
-import { Box, Container, List, ListItem, ListItemText, Stack, Typography } from '@mui/material';
-import { withAuth } from '../../../../lib/authGuard';
-import { getWorkspaceContext } from '../../../../lib/workspaces';
-import { getSeedsForWorkspace } from '../../../../lib/seeds';
-import { getSupabaseServiceRoleClient } from '../../../../lib/supabaseServer';
-import type { WorkspaceWithRole } from '../../../../lib/workspaces';
-import type { Seed } from '../../../../types/db';
-import Link from 'next/link';
-import { useRouter } from 'next/router';
-import { CopilotPanel } from '../../../../src/components/copilot/CopilotPanel';
+import * as React from "react";
+import type { NextPage } from "next";
+import {
+  Box,
+  Button,
+  Card,
+  CardContent,
+  Container,
+  List,
+  ListItem,
+  ListItemText,
+  Stack,
+  Typography,
+} from "@mui/material";
+import { withAuth } from "../../../../lib/authGuard";
+import { getWorkspaceContext } from "../../../../lib/workspaces";
+import { getSeedsForWorkspace } from "../../../../lib/seeds";
+import { getSupabaseServiceRoleClient } from "../../../../lib/supabaseServer";
+import type { WorkspaceWithRole } from "../../../../lib/workspaces";
+import type { Seed } from "../../../../types/db";
+import Link from "next/link";
+import { useRouter } from "next/router";
+import { CopilotPanel } from "../../../../src/components/copilot/CopilotPanel";
 
 type SeedsPageProps = {
   workspace: WorkspaceWithRole;
@@ -20,24 +31,13 @@ type SeedsPageProps = {
 const SeedsPage: NextPage<SeedsPageProps> = ({ workspace, workspaces, seeds }) => {
   const router = useRouter();
   const workspaceId = workspace.id;
+  const [showIdeaBuilder, setShowIdeaBuilder] = React.useState(false);
 
-  const handleAcceptSeedProposal = async (draft: { title: string; summary?: string; why_it_matters?: string }) => {
-    const response = await fetch('/api/seeds/create', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        workspaceId,
-        title: draft.title,
-        summary: draft.summary,
-        whyItMatters: draft.why_it_matters,
-      }),
-    });
-    const payload = await response.json();
-    if (!response.ok || !payload?.seed?.id) {
-      throw new Error(payload.error || 'Unable to create seed');
-    }
-    router.push(`/w/${workspaceId}/seeds/${payload.seed.id}`);
+  const handleSeedCreated = async (newSeedId: string) => {
+    setShowIdeaBuilder(false);
+    await router.push(`/w/${workspaceId}/seeds/${newSeedId}`);
   };
+
   return (
     <Container maxWidth="lg" sx={{ py: 4 }}>
       <Stack spacing={2} mb={4}>
@@ -50,38 +50,45 @@ const SeedsPage: NextPage<SeedsPageProps> = ({ workspace, workspaces, seeds }) =
         </Typography>
       </Stack>
 
-      <Box sx={{ mb: 4 }}>
-        <CopilotPanel
-          workspaceId={workspaceId}
-          onDistillToSeed={async (conversation) => {
-            const response = await fetch('/api/seeds/from-conversation', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ workspaceId, messages: conversation }),
-            });
-            const payload = await response.json();
-            if (!response.ok) {
-              throw new Error(payload.error || 'Unable to create seed');
-            }
-            router.push(`/w/${workspaceId}/seeds/${payload.seedId}`);
-          }}
-          onAcceptSeedProposal={handleAcceptSeedProposal}
-        />
+      <Box mb={3} display="flex" justifyContent="flex-end" gap={2}>
+        <Button variant="outlined" onClick={() => router.push(`/w/${workspaceId}/dashboard`)}>
+          Back to dashboard
+        </Button>
+        <Button variant="contained" onClick={() => setShowIdeaBuilder((prev) => !prev)}>
+          {showIdeaBuilder ? "Hide idea builder" : "Start a new idea"}
+        </Button>
       </Box>
+
+      {showIdeaBuilder && (
+        <Card sx={{ mb: 3 }}>
+          <CardContent>
+            <Typography variant="h6" gutterBottom>
+              Idea builder
+            </Typography>
+            <CopilotPanel
+              workspaceId={workspaceId}
+              allowSeedCreation
+              lensDefault="explore"
+              modeDefault="ask"
+              onSeedCreated={handleSeedCreated}
+            />
+          </CardContent>
+        </Card>
+      )}
 
       {seeds.length === 0 ? (
         <Box
           sx={{
-            border: '1px dashed',
-            borderColor: 'divider',
+            border: "1px dashed",
+            borderColor: "divider",
             borderRadius: 2,
             p: 4,
-            textAlign: 'center',
+            textAlign: "center",
           }}
         >
           <Typography variant="h6">No seeds yet</Typography>
           <Typography color="text.secondary">
-            Start by describing an idea above — Copilot will propose the first seed.
+            Start by describing an idea above - Copilot will propose the first seed.
           </Typography>
         </Box>
       ) : (
@@ -95,7 +102,7 @@ const SeedsPage: NextPage<SeedsPageProps> = ({ workspace, workspaces, seeds }) =
               sx={{
                 borderRadius: 1,
                 mb: 1,
-                '&:hover': { backgroundColor: 'action.hover' },
+                "&:hover": { backgroundColor: "action.hover" },
               }}
             >
               <ListItemText
@@ -123,10 +130,10 @@ const SeedsPage: NextPage<SeedsPageProps> = ({ workspace, workspaces, seeds }) =
 export const getServerSideProps = withAuth(async (ctx) => {
   const workspaceId = ctx.params?.workspaceId;
 
-  if (typeof workspaceId !== 'string') {
+  if (typeof workspaceId !== "string") {
     return {
       redirect: {
-        destination: '/app',
+        destination: "/app",
         permanent: false,
       },
     };

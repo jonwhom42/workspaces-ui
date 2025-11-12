@@ -52,32 +52,46 @@ type PrincipleSuggestion = {
   category?: string;
 };
 
-export type CopilotStructuredSuggestion =
+export type CopilotStructured =
   | {
       mode: 'generic_answer';
-      content: string;
-      structured?: undefined;
+      structured?: null;
     }
   | {
       mode: 'seed_proposal';
-      content: string;
       structured: SeedProposal;
     }
   | {
       mode: 'insight';
-      content: string;
       structured: InsightSuggestion;
     }
   | {
       mode: 'experiment_suggestion';
-      content: string;
       structured: ExperimentSuggestion;
     }
   | {
       mode: 'principle_suggestion';
-      content: string;
       structured: PrincipleSuggestion;
     };
+
+export type DistilledInsight = {
+  summary: string;
+  details?: string;
+};
+
+export type SeedDistillation = SeedDraft & {
+  insights: DistilledInsight[];
+};
+
+export type SeedStewardSuggestions = {
+  summary_update?: {
+    new_summary: string;
+    reason: string;
+  };
+  insight_suggestions?: InsightSuggestion[];
+  experiment_suggestions?: ExperimentSuggestion[];
+  principle_suggestions?: PrincipleSuggestion[];
+};
 
 type CopilotContext = {
   type: string;
@@ -196,6 +210,62 @@ const structuredResponseSchema = {
   },
 } as const;
 
+const seedStewardResponseSchema = {
+  name: 'seed_steward_suggestions',
+  schema: {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      summary_update: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          new_summary: { type: 'string' },
+          reason: { type: 'string' },
+        },
+      },
+      insight_suggestions: {
+        type: 'array',
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            summary: { type: 'string' },
+            details: { type: 'string' },
+            confidence: { type: 'number' },
+          },
+          required: ['summary'],
+        },
+      },
+      experiment_suggestions: {
+        type: 'array',
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            title: { type: 'string' },
+            hypothesis: { type: 'string' },
+            plan: { type: 'string' },
+          },
+          required: ['title'],
+        },
+      },
+      principle_suggestions: {
+        type: 'array',
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            statement: { type: 'string' },
+            category: { type: 'string' },
+          },
+          required: ['statement'],
+        },
+      },
+    },
+  },
+} as const;
+
 const coerceSeedProposal = (candidate: any): SeedProposal | null => {
   if (!candidate) return null;
   const title = typeof candidate.title === 'string' ? candidate.title.trim() : '';
@@ -250,6 +320,60 @@ const coercePrinciple = (candidate: any): PrincipleSuggestion | null => {
   };
 };
 
+const coerceDistilledInsights = (value: any): DistilledInsight[] => {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map<DistilledInsight | null>((entry) => {
+      if (!entry) return null;
+      if (typeof entry === 'string') {
+        const summary = entry.trim();
+        return summary ? { summary } : null;
+      }
+      if (typeof entry === 'object') {
+        const summary =
+          typeof entry.summary === 'string' ? entry.summary.trim() : '';
+        if (!summary) return null;
+        return {
+          summary,
+          details: typeof entry.details === 'string' ? entry.details.trim() : undefined,
+        };
+      }
+      return null;
+    })
+    .filter((entry): entry is DistilledInsight => Boolean(entry));
+};
+
+const coerceSuggestionArray = <T>(value: any, coerce: (candidate: any) => T | null): T[] => {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((entry) => coerce(entry))
+    .filter((entry): entry is T => Boolean(entry));
+};
+
+const coerceSummaryUpdate = (candidate: any):
+  | {
+      new_summary: string;
+      reason: string;
+    }
+  | null => {
+  if (!candidate || typeof candidate !== 'object') {
+    return null;
+  }
+  const newSummary = typeof candidate.new_summary === 'string' ? candidate.new_summary.trim() : '';
+  if (!newSummary) {
+    return null;
+  }
+  const reason =
+    typeof candidate.reason === 'string' && candidate.reason.trim()
+      ? candidate.reason.trim()
+      : 'No reason provided.';
+  return { new_summary: newSummary, reason };
+};
+
 const parseJsonFromModel = (content: string): any => {
   try {
     return JSON.parse(content);
@@ -287,7 +411,7 @@ export const generateCopilotAnswer = async ({
   ...rest
 }: GenerateCopilotAnswerParams): Promise<{
   answer: string;
-  structured: CopilotStructuredSuggestion;
+  structured: CopilotStructured;
 }> => {
   if (!openai) {
     throw new Error('AI client is not configured');
@@ -328,31 +452,31 @@ export const generateCopilotAnswer = async ({
     ? parsed.mode
     : 'generic_answer';
 
-  let structuredPayload: CopilotStructuredSuggestion | undefined;
+  let structuredPayload: CopilotStructured | undefined;
   if (mode === 'seed_proposal') {
     const seedDraft = coerceSeedProposal(parsed.structured);
     if (seedDraft) {
-      structuredPayload = { mode, content: responseAnswer, structured: seedDraft };
+      structuredPayload = { mode, structured: seedDraft };
     }
   } else if (mode === 'insight') {
     const insight = coerceInsight(parsed.structured);
     if (insight) {
-      structuredPayload = { mode, content: responseAnswer, structured: insight };
+      structuredPayload = { mode, structured: insight };
     }
   } else if (mode === 'experiment_suggestion') {
     const experiment = coerceExperiment(parsed.structured);
     if (experiment) {
-      structuredPayload = { mode, content: responseAnswer, structured: experiment };
+      structuredPayload = { mode, structured: experiment };
     }
   } else if (mode === 'principle_suggestion') {
     const principle = coercePrinciple(parsed.structured);
     if (principle) {
-      structuredPayload = { mode, content: responseAnswer, structured: principle };
+      structuredPayload = { mode, structured: principle };
     }
   }
 
   if (!structuredPayload) {
-    structuredPayload = { mode: 'generic_answer', content: responseAnswer };
+    structuredPayload = { mode: 'generic_answer', structured: null };
   }
 
   return { answer: responseAnswer, structured: structuredPayload };
@@ -430,7 +554,7 @@ export const draftSeedFromIdea = async (idea: string): Promise<SeedDraft> => {
 
 export const distillSeedFromConversation = async (
   messages: CopilotMessage[],
-): Promise<SeedDraft & { insights: string[] }> => {
+): Promise<SeedDistillation> => {
   if (!openai) {
     throw new Error('AI client is not configured');
   }
@@ -475,9 +599,141 @@ export const distillSeedFromConversation = async (
     draft.title = 'New Seed';
   }
 
-  const insights: string[] = Array.isArray(parsed.insights)
-    ? parsed.insights.map((entry: unknown) => String(entry).trim()).filter(Boolean)
-    : [];
+  const insights = coerceDistilledInsights(parsed.insights);
 
   return { ...draft, insights };
+};
+
+type SeedStewardContext = {
+  seed: {
+    title: string;
+    summary?: string | null;
+    why_it_matters?: string | null;
+    status?: string | null;
+  };
+  knowledge: { title?: string | null; snippet: string; type?: string | null }[];
+  insights: { summary: string; details?: string | null }[];
+  experiments: {
+    title: string;
+    status?: string | null;
+    hypothesis?: string | null;
+    plan?: string | null;
+    result_summary?: string | null;
+  }[];
+  events: { type: string; created_at?: string | null; note?: string | null }[];
+};
+
+export const getSeedStewardSuggestions = async (
+  context: SeedStewardContext,
+): Promise<SeedStewardSuggestions> => {
+  if (!openai) {
+    throw new Error('AI client is not configured');
+  }
+
+  const formatList = (items: string[]): string =>
+    items.length ? items.join('\n') : 'None.';
+
+  const knowledgeLines = context.knowledge
+    .slice(0, 8)
+    .map(
+      (item, index) =>
+        `${index + 1}. [${item.type ?? 'note'}] ${item.title ?? 'Untitled'} — ${item.snippet}`,
+    );
+
+  const insightLines = context.insights
+    .slice(0, 8)
+    .map(
+      (item, index) =>
+        `${index + 1}. ${item.summary}${item.details ? ` (${item.details.slice(0, 180)})` : ''}`,
+    );
+
+  const experimentLines = context.experiments
+    .slice(0, 8)
+    .map((experiment, index) => {
+      const parts = [
+        `${index + 1}. ${experiment.title}`,
+        experiment.status ? `Status: ${experiment.status}` : null,
+        experiment.hypothesis ? `Hypothesis: ${experiment.hypothesis}` : null,
+        experiment.plan ? `Plan: ${experiment.plan.slice(0, 180)}` : null,
+        experiment.result_summary ? `Result: ${experiment.result_summary.slice(0, 180)}` : null,
+      ]
+        .filter(Boolean)
+        .join(' | ');
+      return parts;
+    });
+
+  const eventLines = context.events
+    .slice(0, 10)
+    .map(
+      (event, index) =>
+        `${index + 1}. ${event.type}${event.note ? ` — ${event.note.slice(0, 140)}` : ''}`,
+    );
+
+  const messages = [
+    {
+      role: 'system' as const,
+      content:
+        'You are the Seed Steward. You NEVER apply changes yourself. ' +
+        'You only propose structured suggestions grounded in the provided data. ' +
+        'If nothing meaningful is needed, return empty arrays.',
+    },
+    {
+      role: 'user' as const,
+      content: [
+        `Seed:\nTitle: ${context.seed.title}\nStatus: ${context.seed.status ?? 'unknown'}\nSummary: ${
+          context.seed.summary ?? 'n/a'
+        }\nWhy it matters: ${context.seed.why_it_matters ?? 'n/a'}`,
+        `Knowledge Items:\n${formatList(knowledgeLines)}`,
+        `Insights:\n${formatList(insightLines)}`,
+        `Experiments:\n${formatList(experimentLines)}`,
+        `Recent Events:\n${formatList(eventLines)}`,
+      ].join('\n\n'),
+    },
+  ];
+
+  const response = await openai.chat.completions.create({
+    model: chatModel,
+    temperature: 0.2,
+    messages,
+    response_format: {
+      type: 'json_schema',
+      json_schema: seedStewardResponseSchema,
+    },
+  });
+
+  const rawContent = response.choices[0]?.message?.content?.trim();
+  if (!rawContent) {
+    return {};
+  }
+
+  const parsed = parseJsonFromModel(rawContent);
+  const suggestions: SeedStewardSuggestions = {};
+
+  const summaryUpdate = coerceSummaryUpdate(parsed.summary_update);
+  if (summaryUpdate) {
+    suggestions.summary_update = summaryUpdate;
+  }
+
+  const insightSuggestions = coerceSuggestionArray(parsed.insight_suggestions, (entry) =>
+    coerceInsight(entry),
+  );
+  if (insightSuggestions.length) {
+    suggestions.insight_suggestions = insightSuggestions.slice(0, 5);
+  }
+
+  const experimentSuggestions = coerceSuggestionArray(parsed.experiment_suggestions, (entry) =>
+    coerceExperiment(entry),
+  );
+  if (experimentSuggestions.length) {
+    suggestions.experiment_suggestions = experimentSuggestions.slice(0, 5);
+  }
+
+  const principleSuggestions = coerceSuggestionArray(parsed.principle_suggestions, (entry) =>
+    coercePrinciple(entry),
+  );
+  if (principleSuggestions.length) {
+    suggestions.principle_suggestions = principleSuggestions.slice(0, 5);
+  }
+
+  return suggestions;
 };

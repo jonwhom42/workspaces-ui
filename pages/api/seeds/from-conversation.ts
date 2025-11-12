@@ -1,7 +1,10 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { createServerSupabase } from '../../../lib/supabaseServer';
 import { getUserWorkspaceById } from '../../../lib/workspaces';
-import { distillSeedFromConversation, type CopilotMessage } from '../../../lib/aiClient';
+import {
+  distillSeedFromConversation,
+  type CopilotMessage,
+} from '../../../lib/aiClient';
 import { createSeed } from '../../../lib/seeds';
 import { createKnowledgeItem } from '../../../lib/knowledge';
 import { createInsight } from '../../../lib/insights';
@@ -22,7 +25,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(401).json({ error: 'Unauthorized' });
   }
 
-  const { workspaceId, messages } = req.body ?? {};
+  const { workspaceId, messages, seedDraft } = req.body ?? {};
 
   if (typeof workspaceId !== 'string' || !workspaceId) {
     return res.status(400).json({ error: 'workspaceId is required' });
@@ -51,15 +54,36 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   try {
-    const draft = await distillSeedFromConversation(normalizedMessages);
+    const aiDraft = await distillSeedFromConversation(normalizedMessages);
+    const override =
+      seedDraft && typeof seedDraft === 'object'
+        ? {
+            title:
+              typeof seedDraft.title === 'string' ? seedDraft.title.trim() : undefined,
+            summary:
+              typeof seedDraft.summary === 'string' ? seedDraft.summary.trim() : undefined,
+            why_it_matters:
+              typeof seedDraft.why_it_matters === 'string'
+                ? seedDraft.why_it_matters.trim()
+                : undefined,
+          }
+        : null;
+
+    const mergedDraft = {
+      ...aiDraft,
+      title: override?.title || aiDraft.title || 'New Seed',
+      summary: override?.summary ?? aiDraft.summary,
+      why_it_matters: override?.why_it_matters ?? aiDraft.why_it_matters,
+    };
+
     const seed = await createSeed(
       supabase,
       workspaceId,
       user.id,
       {
-        title: draft.title,
-        summary: draft.summary,
-        whyItMatters: draft.why_it_matters,
+        title: mergedDraft.title,
+        summary: mergedDraft.summary,
+        whyItMatters: mergedDraft.why_it_matters,
       },
       {},
     );
@@ -74,14 +98,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       user.id,
       {
         seedId: seed.id,
-        type: 'note',
-        title: 'Idea conversation',
+        type: 'transcript',
+        title: 'Conversation transcript',
         content: transcript,
       },
       {},
     );
 
-    if (draft.suggested_tags.length) {
+    if (mergedDraft.suggested_tags.length) {
       await supabase
         .from('events')
         .insert({
@@ -89,19 +113,24 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           user_id: user.id,
           seed_id: seed.id,
           type: 'seed_tags_suggested',
-          payload: { tags: draft.suggested_tags },
+          payload: { tags: mergedDraft.suggested_tags },
         })
         .select('id');
     }
 
-    if (draft.insights?.length) {
+    if (mergedDraft.insights?.length) {
       await Promise.all(
-        draft.insights.map((summary) =>
+        mergedDraft.insights.slice(0, 5).map((insight) =>
           createInsight(
             supabase,
             workspaceId,
             user.id,
-            { seedId: seed.id, summary },
+            {
+              seedId: seed.id,
+              summary: insight.summary,
+              details: insight.details ?? null,
+              sourceType: 'copilot',
+            },
             {},
           ),
         ),
@@ -115,6 +144,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       type: 'seed_created_from_conversation',
       payload: {
         message_count: normalizedMessages.length,
+        insight_count: mergedDraft.insights.length,
       },
     });
 

@@ -182,6 +182,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       payload: {
         mode,
         lens: normalizedLens,
+        structured_mode: copilotResponse.structured?.mode ?? 'generic_answer',
         context_refs: prioritizedContexts.slice(0, 5).map((ctx) => ctx.ref),
       },
     });

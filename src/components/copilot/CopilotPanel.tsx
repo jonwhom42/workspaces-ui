@@ -1,4 +1,5 @@
 ﻿import * as React from 'react';
+import { useRouter } from 'next/router';
 import {
   Box,
   Button,
@@ -9,11 +10,7 @@ import {
   TextField,
   Typography,
 } from '@mui/material';
-import type {
-  CopilotLens,
-  CopilotMessage,
-  CopilotStructuredSuggestion,
-} from '../../../lib/aiClient';
+import type { CopilotLens, CopilotMessage, CopilotStructured } from '../../../lib/aiClient';
 
 type Mode = 'ask' | 'summarize' | 'reflect' | 'plan';
 type Lens = CopilotLens;
@@ -27,50 +24,49 @@ type Source = {
 type CopilotResponsePayload = {
   message: CopilotMessage;
   sources?: Source[];
-  structured?: CopilotStructuredSuggestion;
-};
-
-type InsightHandlerPayload = {
-  answer: string;
-  suggestion?: CopilotStructuredSuggestion;
+  structured?: CopilotStructured;
+  error?: string;
 };
 
 type CopilotPanelProps = {
   workspaceId: string;
   seedId?: string;
-  modeOptions?: Mode[];
-  lensOptions?: Lens[];
-  initialMessages?: CopilotMessage[];
-  onDistillToSeed?: (messages: CopilotMessage[]) => Promise<void> | void;
-  onAcceptSeedProposal?: (draft: { title: string; summary?: string; why_it_matters?: string }) =>
-    | Promise<void>
-    | void;
-  onSaveInsight?: (payload: InsightHandlerPayload) => Promise<void> | void;
-  onCreateExperiment?: (payload: InsightHandlerPayload) => Promise<void> | void;
+  lensDefault?: Lens;
+  modeDefault?: Mode;
+  allowSeedCreation?: boolean;
+  onSeedCreated?: (seedId: string) => void;
 };
+
+const MAX_INSIGHT_SUMMARY = 200;
+
+const MODE_OPTIONS: Mode[] = ['ask', 'summarize', 'plan', 'reflect'];
+const LENS_OPTIONS: Lens[] = ['explore', 'distill', 'design', 'mirror'];
 
 export function CopilotPanel({
   workspaceId,
   seedId,
-  modeOptions = ['ask', 'summarize', 'plan', 'reflect'],
-  lensOptions = ['explore', 'distill', 'design', 'mirror'],
-  initialMessages = [],
-  onDistillToSeed,
-  onAcceptSeedProposal,
-  onSaveInsight,
-  onCreateExperiment,
+  lensDefault = 'explore',
+  modeDefault = 'ask',
+  allowSeedCreation = false,
+  onSeedCreated,
 }: CopilotPanelProps) {
-  const [messages, setMessages] = React.useState<CopilotMessage[]>(initialMessages);
+  const router = useRouter();
+  const [messages, setMessages] = React.useState<CopilotMessage[]>([]);
   const [input, setInput] = React.useState('');
-  const [mode, setMode] = React.useState<Mode>('ask');
-  const [lens, setLens] = React.useState<Lens>('explore');
+  const [mode, setMode] = React.useState<Mode>(modeDefault);
+  const [lens, setLens] = React.useState<Lens>(lensDefault);
   const [isLoading, setIsLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const [sources, setSources] = React.useState<Source[]>([]);
-  const [structured, setStructured] = React.useState<CopilotStructuredSuggestion | null>(null);
+  const [structured, setStructured] = React.useState<CopilotStructured | null>(null);
   const [actionStatus, setActionStatus] = React.useState<string | null>(null);
   const [actionLoading, setActionLoading] = React.useState(false);
   const scrollRef = React.useRef<HTMLDivElement | null>(null);
+
+  const lastAssistantMessage = React.useMemo(
+    () => [...messages].reverse().find((message) => message.role === 'assistant'),
+    [messages],
+  );
 
   React.useEffect(() => {
     if (scrollRef.current) {
@@ -78,11 +74,9 @@ export function CopilotPanel({
     }
   }, [messages]);
 
-  const lastAssistantMessage = [...messages].reverse().find((message) => message.role === 'assistant');
-
   const sendMessage = async () => {
     const trimmed = input.trim();
-    if (!trimmed) return;
+    if (!trimmed || isLoading) return;
     const newMessages = [...messages, { role: 'user', content: trimmed } as CopilotMessage];
     setMessages(newMessages);
     setInput('');
@@ -94,18 +88,10 @@ export function CopilotPanel({
     try {
       const response = await fetch('/api/ai/query', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          workspaceId,
-          seedId,
-          mode,
-          lens,
-          messages: newMessages,
-        }),
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ workspaceId, seedId, mode, lens, messages: newMessages }),
       });
-      const payload = (await response.json()) as CopilotResponsePayload & { error?: string };
+      const payload: CopilotResponsePayload = await response.json();
       if (!response.ok) {
         throw new Error(payload.error || 'Copilot request failed');
       }
@@ -119,50 +105,99 @@ export function CopilotPanel({
     }
   };
 
-  const handleDistill = async () => {
-    if (!onDistillToSeed) return;
-    setActionLoading(true);
-    setActionStatus(null);
-    try {
-      await onDistillToSeed(messages);
-      setActionStatus('Seed created from conversation');
-    } catch (distillError) {
-      setError(distillError instanceof Error ? distillError.message : 'Unable to distill seed');
-    } finally {
-      setActionLoading(false);
+  const seedDraft = structured?.mode === 'seed_proposal' ? structured.structured : null;
+  const experimentDraft =
+    structured?.mode === 'experiment_suggestion' ? structured.structured : null;
+  const principleDraft =
+    structured?.mode === 'principle_suggestion' ? structured.structured : null;
+
+  const refreshSeedPage = React.useCallback(async () => {
+    if (seedId) {
+      await router.replace(router.asPath);
     }
+  }, [router, seedId]);
+
+  const buildInsightFields = () => {
+    if (!seedId || !lastAssistantMessage) return null;
+    if (structured?.mode === 'insight' && structured.structured) {
+      return {
+        summary:
+          structured.structured.summary ||
+          lastAssistantMessage.content.trim().slice(0, MAX_INSIGHT_SUMMARY) ||
+          'Insight',
+        details: structured.structured.details ?? lastAssistantMessage.content,
+        confidence:
+          typeof structured.structured.confidence === 'number'
+            ? structured.structured.confidence
+            : null,
+      };
+    }
+    return {
+      summary: lastAssistantMessage.content.trim().slice(0, MAX_INSIGHT_SUMMARY) || 'Insight',
+      details: lastAssistantMessage.content,
+      confidence: null,
+    };
   };
 
-  const handleAcceptSeedProposal = async () => {
-    if (!onAcceptSeedProposal || !structured || structured.mode !== 'seed_proposal' || !structured.structured) {
-      return;
-    }
+  const handleCreateSeedFromSuggestion = async () => {
+    if (!allowSeedCreation || seedId) return;
+    if (!seedDraft && !lastAssistantMessage) return;
     setActionLoading(true);
+    setError(null);
     setActionStatus(null);
     try {
-      await onAcceptSeedProposal({
-        title: structured.structured.title,
-        summary: structured.structured.summary,
-        why_it_matters: structured.structured.why_it_matters,
+      const response = await fetch('/api/seeds/from-conversation', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          workspaceId,
+          messages,
+          seedDraft: seedDraft
+            ? {
+                title: seedDraft.title,
+                summary: seedDraft.summary ?? '',
+                why_it_matters: seedDraft.why_it_matters ?? '',
+              }
+            : undefined,
+        }),
       });
-      setActionStatus('Seed created');
-    } catch (seedError) {
-      setError(seedError instanceof Error ? seedError.message : 'Unable to create seed');
+      const payload = await response.json();
+      if (!response.ok) {
+        throw new Error(payload.error || 'Unable to create seed');
+      }
+      setActionStatus('Seed created from conversation');
+      onSeedCreated?.(payload.seedId);
+    } catch (creationError) {
+      setError(creationError instanceof Error ? creationError.message : 'Unable to create seed');
     } finally {
       setActionLoading(false);
     }
   };
 
   const handleSaveInsight = async () => {
-    if (!onSaveInsight || !lastAssistantMessage) return;
+    const fields = buildInsightFields();
+    if (!fields) return;
     setActionLoading(true);
+    setError(null);
     setActionStatus(null);
     try {
-      await onSaveInsight({
-        answer: lastAssistantMessage.content,
-        suggestion: structured?.mode === 'insight' ? structured : undefined,
+      const response = await fetch('/api/insights/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          workspaceId,
+          seedId,
+          summary: fields.summary,
+          details: fields.details ?? null,
+          confidence: fields.confidence,
+        }),
       });
-      setActionStatus('Saved as insight');
+      const payload = await response.json();
+      if (!response.ok) {
+        throw new Error(payload.error || 'Unable to save insight');
+      }
+      setActionStatus('Insight saved');
+      await refreshSeedPage();
     } catch (insightError) {
       setError(insightError instanceof Error ? insightError.message : 'Unable to save insight');
     } finally {
@@ -171,29 +206,90 @@ export function CopilotPanel({
   };
 
   const handleCreateExperiment = async () => {
-    if (!onCreateExperiment || !lastAssistantMessage) return;
+    if (!seedId || !experimentDraft) return;
     setActionLoading(true);
+    setError(null);
     setActionStatus(null);
     try {
-      await onCreateExperiment({
-        answer: lastAssistantMessage.content,
-        suggestion: structured?.mode === 'experiment_suggestion' ? structured : undefined,
+      const response = await fetch('/api/experiments/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          workspaceId,
+          seedId,
+          title: experimentDraft.title,
+          hypothesis: experimentDraft.hypothesis ?? null,
+          plan: experimentDraft.plan ?? null,
+        }),
       });
+      const payload = await response.json();
+      if (!response.ok) {
+        throw new Error(payload.error || 'Unable to create experiment');
+      }
       setActionStatus('Experiment created');
+      await refreshSeedPage();
     } catch (experimentError) {
-      setError(experimentError instanceof Error ? experimentError.message : 'Unable to create experiment');
+      setError(
+        experimentError instanceof Error ? experimentError.message : 'Unable to create experiment',
+      );
     } finally {
       setActionLoading(false);
     }
   };
 
+  const handleCreatePrinciple = async () => {
+    if (!seedId || !principleDraft) return;
+    setActionLoading(true);
+    setError(null);
+    setActionStatus(null);
+    try {
+      const response = await fetch('/api/principles/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          workspaceId,
+          seedId,
+          statement: principleDraft.statement,
+          category: principleDraft.category ?? null,
+        }),
+      });
+      const payload = await response.json();
+      if (!response.ok) {
+        throw new Error(payload.error || 'Unable to add principle');
+      }
+      setActionStatus('Principle added');
+      await refreshSeedPage();
+    } catch (principleError) {
+      setError(
+        principleError instanceof Error ? principleError.message : 'Unable to add principle',
+      );
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const actionButtons: Array<{ label: string; onClick: () => void; variant?: 'outlined' | 'contained' }> = [];
+  if (!seedId && allowSeedCreation && (seedDraft || lastAssistantMessage)) {
+    actionButtons.push({ label: 'Create seed from this', onClick: handleCreateSeedFromSuggestion });
+  }
+  if (seedId && lastAssistantMessage) {
+    actionButtons.push({ label: 'Save as Insight', onClick: handleSaveInsight, variant: 'outlined' });
+  }
+  if (seedId && experimentDraft) {
+    actionButtons.push({ label: 'Create Experiment', onClick: handleCreateExperiment });
+  }
+  if (seedId && principleDraft) {
+    actionButtons.push({ label: 'Add Principle', onClick: handleCreatePrinciple });
+  }
+
   return (
     <Card variant="outlined">
       <CardContent sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-        <Box
+        <Stack
           ref={scrollRef}
+          spacing={1}
           sx={{
-            maxHeight: 400,
+            maxHeight: 360,
             overflowY: 'auto',
             border: '1px solid',
             borderColor: 'divider',
@@ -205,28 +301,27 @@ export function CopilotPanel({
           {messages.length === 0 ? (
             <Typography color="text.secondary">Start the conversation to brief Copilot.</Typography>
           ) : (
-            <Stack spacing={1.5}>
-              {messages.map((message, index) => (
-                <Box
-                  key={`${message.role}-${index}-${message.content.slice(0, 8)}`}
-                  sx={{
-                    alignSelf: message.role === 'user' ? 'flex-end' : 'flex-start',
-                    maxWidth: '90%',
-                    backgroundColor: message.role === 'user' ? 'primary.main' : 'background.paper',
-                    color: message.role === 'user' ? 'primary.contrastText' : 'text.primary',
-                    borderRadius: 2,
-                    px: 2,
-                    py: 1.5,
-                  }}
-                >
-                  <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap' }}>
-                    {message.content}
-                  </Typography>
-                </Box>
-              ))}
-            </Stack>
+            messages.map((message, index) => (
+              <Box
+                key={`${message.role}-${index}-${message.content.slice(0, 6)}`}
+                sx={{
+                  alignSelf: message.role === 'user' ? 'flex-end' : 'flex-start',
+                  bgcolor: message.role === 'user' ? 'primary.main' : 'grey.100',
+                  color: message.role === 'user' ? 'primary.contrastText' : 'text.primary',
+                  px: 1.5,
+                  py: 1,
+                  borderRadius: 2,
+                  maxWidth: '80%',
+                  whiteSpace: 'pre-wrap',
+                  wordBreak: 'break-word',
+                  fontSize: 14,
+                }}
+              >
+                {message.content}
+              </Box>
+            ))
           )}
-        </Box>
+        </Stack>
 
         <Stack spacing={1}>
           <TextField
@@ -237,7 +332,7 @@ export function CopilotPanel({
             value={lens}
             onChange={(event) => setLens(event.target.value as Lens)}
           >
-            {lensOptions.map((option) => (
+            {LENS_OPTIONS.map((option) => (
               <MenuItem key={option} value={option}>
                 {option}
               </MenuItem>
@@ -251,7 +346,7 @@ export function CopilotPanel({
             value={mode}
             onChange={(event) => setMode(event.target.value as Mode)}
           >
-            {modeOptions.map((option) => (
+            {MODE_OPTIONS.map((option) => (
               <MenuItem key={option} value={option}>
                 {option}
               </MenuItem>
@@ -265,47 +360,33 @@ export function CopilotPanel({
             onChange={(event) => setInput(event.target.value)}
             placeholder="Ask a question or describe what you need..."
           />
-          <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
+          <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} justifyContent="space-between">
             <Button variant="contained" onClick={sendMessage} disabled={isLoading || !input.trim()}>
               {isLoading ? 'Thinking...' : 'Send'}
             </Button>
-            {!seedId && onDistillToSeed && messages.length > 0 && (
-              <Button variant="outlined" onClick={handleDistill} disabled={actionLoading}>
-                Distill into Seed
-              </Button>
-            )}
-            {!seedId &&
-              structured &&
-              structured.mode === 'seed_proposal' &&
-              structured.structured &&
-              onAcceptSeedProposal && (
-              <Button onClick={handleAcceptSeedProposal} disabled={actionLoading}>
-                Create seed from suggestion
-              </Button>
-            )}
-            {seedId && lastAssistantMessage && onSaveInsight && (
-              <Button variant="outlined" onClick={handleSaveInsight} disabled={actionLoading}>
-                Save as Insight
-              </Button>
-            )}
-            {seedId && lastAssistantMessage && onCreateExperiment && (
-              <Button onClick={handleCreateExperiment} disabled={actionLoading}>
-                Create Experiment
-              </Button>
+            {actionButtons.length > 0 && (
+              <Stack direction="row" spacing={1} justifyContent="flex-end" flexWrap="wrap">
+                {actionButtons.map((action) => (
+                  <Button
+                    key={action.label}
+                    size="small"
+                    variant={action.variant ?? 'text'}
+                    onClick={action.onClick}
+                    disabled={actionLoading}
+                  >
+                    {action.label}
+                  </Button>
+                ))}
+              </Stack>
             )}
           </Stack>
         </Stack>
 
-        {structured && structured.mode !== 'generic_answer' && (
+        {structured && structured.mode !== 'generic_answer' && structured.structured && (
           <Box sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 1, p: 2 }}>
-            <Typography variant="subtitle2" gutterBottom>
-              Structured suggestion
-            </Typography>
-            <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap' }} gutterBottom>
-              {structured.content}
-            </Typography>
-            {structured.mode === 'seed_proposal' && structured.structured && (
-              <Stack spacing={0.5}>
+            {structured.mode === 'seed_proposal' && (
+              <>
+                <Typography variant="subtitle2">Seed proposal</Typography>
                 <Typography variant="body2">
                   <strong>Title:</strong> {structured.structured.title}
                 </Typography>
@@ -319,53 +400,47 @@ export function CopilotPanel({
                     <strong>Why it matters:</strong> {structured.structured.why_it_matters}
                   </Typography>
                 )}
-              </Stack>
+              </>
             )}
-            {structured.mode === 'insight' && structured.structured && (
-              <Stack spacing={0.5}>
-                <Typography variant="body2">
-                  <strong>Summary:</strong> {structured.structured.summary}
-                </Typography>
+            {structured.mode === 'insight' && (
+              <>
+                <Typography variant="subtitle2">Insight suggestion</Typography>
+                <Typography variant="body2">{structured.structured.summary}</Typography>
                 {structured.structured.details && (
-                  <Typography variant="body2">
-                    <strong>Details:</strong> {structured.structured.details}
+                  <Typography variant="body2" color="text.secondary">
+                    {structured.structured.details}
                   </Typography>
                 )}
-                {typeof structured.structured.confidence === 'number' && (
-                  <Typography variant="body2">
-                    <strong>Confidence:</strong> {structured.structured.confidence}
-                  </Typography>
-                )}
-              </Stack>
+              </>
             )}
-            {structured.mode === 'experiment_suggestion' && structured.structured && (
-              <Stack spacing={0.5}>
-                <Typography variant="body2">
-                  <strong>Title:</strong> {structured.structured.title}
+            {structured.mode === 'experiment_suggestion' && (
+              <>
+                <Typography variant="subtitle2">Experiment suggestion</Typography>
+                <Typography variant="body2" fontWeight={600}>
+                  {structured.structured.title}
                 </Typography>
                 {structured.structured.hypothesis && (
-                  <Typography variant="body2">
-                    <strong>Hypothesis:</strong> {structured.structured.hypothesis}
+                  <Typography variant="body2" color="text.secondary">
+                    Hypothesis: {structured.structured.hypothesis}
                   </Typography>
                 )}
                 {structured.structured.plan && (
-                  <Typography variant="body2">
-                    <strong>Plan:</strong> {structured.structured.plan}
+                  <Typography variant="body2" color="text.secondary">
+                    Plan: {structured.structured.plan}
                   </Typography>
                 )}
-              </Stack>
+              </>
             )}
-            {structured.mode === 'principle_suggestion' && structured.structured && (
-              <Stack spacing={0.5}>
-                <Typography variant="body2">
-                  <strong>Statement:</strong> {structured.structured.statement}
-                </Typography>
+            {structured.mode === 'principle_suggestion' && (
+              <>
+                <Typography variant="subtitle2">Principle suggestion</Typography>
+                <Typography variant="body2">{structured.structured.statement}</Typography>
                 {structured.structured.category && (
-                  <Typography variant="body2">
-                    <strong>Category:</strong> {structured.structured.category}
+                  <Typography variant="caption" color="text.secondary">
+                    Category: {structured.structured.category}
                   </Typography>
                 )}
-              </Stack>
+              </>
             )}
           </Box>
         )}
@@ -385,7 +460,7 @@ export function CopilotPanel({
             <Typography variant="subtitle2">Sources</Typography>
             {sources.map((source) => (
               <Typography key={source.ref} variant="body2" color="text.secondary">
-                • {source.label} ({source.type})
+                - {source.label} ({source.type})
               </Typography>
             ))}
           </Box>
